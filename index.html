@@ -11,28 +11,168 @@
   <body>
     <h1>Temperature converter</h1>
     <form id="converter">
-  <label for="input-temp">temperatura</label>
-  <input type="text" id="input-temp" name="input-temp" value="20" />
-  <label for="input-unit">from</label>
-  <select id="input-unit" name="input-unit">
-    <option value="c" selected>Celsius</option>
-    <option value="f">Fahrenheit</option>
-    <option value="k">Kelvin</option>
-  </select>
-  <label for="output-unit">to</label>
-  <select id="output-unit" name="output-unit">
-    <option value="c">Celsius</option>
-    <option value="f" selected>Fahrenheit</option>
-    <option value="k">Kelvin</option>
-  </select>
-  <output name="output-temp" id="output-temp" for="input-temp input-unit output-unit">68 F</output>
-</form>
-<script src="converter.js"></script>
+      <label for="input-temp">temperatura</label>
+      <input type="text" id="input-temp" name="input-temp" value="20" />
+      <label for="input-unit">from</label>
+      <select id="input-unit" name="input-unit">
+        <option value="c" selected>Celsius</option>
+        <option value="f">Fahrenheit</option>
+        <option value="k">Kelvin</option>
+      </select>
+      <label for="output-unit">to</label>
+      <select id="output-unit" name="output-unit">
+        <option value="c">Celsius</option>
+        <option value="f" selected>Fahrenheit</option>
+        <option value="k">Kelvin</option>
+      </select>
+      <output name="output-temp" id="output-temp" for="input-temp input-unit output-unit">68 F</output>
+    </form>
 
-<script>
-if('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js', { scope: '/' });
-}
-</script>
+    <!-- Botón para ver historial (opcional) -->
+    <div style="margin-top: 20px;">
+      <button id="show-history" style="padding: 10px; cursor: pointer;">Ver Historial</button>
+      <button id="clear-history" style="padding: 10px; cursor: pointer; margin-left: 10px;">Limpiar Historial</button>
+    </div>
+    <div id="history-container" style="margin-top: 20px; display: none;">
+      <h3>Historial de Conversiones</h3>
+      <ul id="history-list"></ul>
+    </div>
+
+    <script src="converter.js"></script>
+
+    <script>
+      // Registrar ambos Service Workers
+      if('serviceWorker' in navigator) {
+        // Service Worker principal (caché)
+        navigator.serviceWorker.register('/sw.js', { scope: '/' })
+          .then(reg => console.log('SW principal registrado:', reg))
+          .catch(err => console.error('Error registrando SW principal:', err));
+        
+        // Service Worker de sincronización
+        navigator.serviceWorker.register('/sync-sw.js', { scope: '/' })
+          .then(reg => console.log('Sync SW registrado:', reg))
+          .catch(err => console.error('Error registrando Sync SW:', err));
+      }
+
+      // Función para enviar mensajes al Sync Service Worker
+      async function sendMessageToSyncSW(message) {
+        if (!navigator.serviceWorker.controller) {
+          console.warn('No hay Service Worker activo');
+          return null;
+        }
+
+        return new Promise((resolve, reject) => {
+          const messageChannel = new MessageChannel();
+          
+          messageChannel.port1.onmessage = (event) => {
+            resolve(event.data);
+          };
+          
+          navigator.serviceWorker.controller.postMessage(message, [messageChannel.port2]);
+        });
+      }
+
+      // Guardar conversión cada vez que cambie el resultado
+      const converterForm = document.getElementById('converter');
+      const outputTemp = document.getElementById('output-temp');
+      
+      // Observer para detectar cambios en el resultado
+      const observer = new MutationObserver(async () => {
+        const inputTemp = document.getElementById('input-temp').value;
+        const inputUnit = document.getElementById('input-unit').value;
+        const outputUnit = document.getElementById('output-unit').value;
+        const result = outputTemp.textContent;
+        
+        if (inputTemp && result) {
+          await sendMessageToSyncSW({
+            type: 'SAVE_CONVERSION',
+            data: {
+              value: parseFloat(inputTemp),
+              fromUnit: inputUnit,
+              toUnit: outputUnit,
+              result: result
+            }
+          });
+          console.log('Conversión guardada');
+        }
+      });
+      
+      observer.observe(outputTemp, { childList: true, characterData: true, subtree: true });
+
+      // Guardar preferencias cuando cambien las unidades
+      document.getElementById('input-unit').addEventListener('change', async (e) => {
+        await sendMessageToSyncSW({
+          type: 'SAVE_PREFERENCE',
+          data: { key: 'lastInputUnit', value: e.target.value }
+        });
+      });
+
+      document.getElementById('output-unit').addEventListener('change', async (e) => {
+        await sendMessageToSyncSW({
+          type: 'SAVE_PREFERENCE',
+          data: { key: 'lastOutputUnit', value: e.target.value }
+        });
+      });
+
+      // Botón para mostrar historial
+      document.getElementById('show-history').addEventListener('click', async () => {
+        const historyContainer = document.getElementById('history-container');
+        const historyList = document.getElementById('history-list');
+        
+        if (historyContainer.style.display === 'none') {
+          const response = await sendMessageToSyncSW({
+            type: 'GET_CONVERSIONS',
+            data: { limit: 20 }
+          });
+          
+          historyList.innerHTML = '';
+          
+          if (response?.conversions && response.conversions.length > 0) {
+            response.conversions.forEach(conv => {
+              const li = document.createElement('li');
+              const date = new Date(conv.timestamp).toLocaleString();
+              li.textContent = `${conv.value} ${conv.fromUnit} → ${conv.result} (${date})`;
+              historyList.appendChild(li);
+            });
+          } else {
+            historyList.innerHTML = '<li>No hay conversiones guardadas</li>';
+          }
+          
+          historyContainer.style.display = 'block';
+        } else {
+          historyContainer.style.display = 'none';
+        }
+      });
+
+      // Botón para limpiar historial
+      document.getElementById('clear-history').addEventListener('click', async () => {
+        if (confirm('¿Seguro que deseas eliminar todo el historial?')) {
+          await sendMessageToSyncSW({ type: 'CLEAR_HISTORY' });
+          document.getElementById('history-list').innerHTML = '<li>Historial eliminado</li>';
+          console.log('Historial limpiado');
+        }
+      });
+
+      // Cargar preferencias guardadas al iniciar
+      window.addEventListener('load', async () => {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Esperar que SW se active
+        
+        const response = await sendMessageToSyncSW({ type: 'GET_PREFERENCES' });
+        
+        if (response?.preferences) {
+          const { lastInputUnit, lastOutputUnit } = response.preferences;
+          
+          if (lastInputUnit) {
+            document.getElementById('input-unit').value = lastInputUnit;
+          }
+          if (lastOutputUnit) {
+            document.getElementById('output-unit').value = lastOutputUnit;
+          }
+          
+          // Disparar evento para actualizar la conversión
+          document.getElementById('input-unit').dispatchEvent(new Event('change'));
+        }
+      });
+    </script>
   </body>
 </html>
