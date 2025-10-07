@@ -28,7 +28,7 @@
       <output name="output-temp" id="output-temp" for="input-temp input-unit output-unit">68 F</output>
     </form>
 
-    <!-- Botón para ver historial (opcional) -->
+    <!-- Botones de historial -->
     <div style="margin-top: 20px;">
       <button id="show-history" style="padding: 10px; cursor: pointer;">Ver Historial</button>
       <button id="clear-history" style="padding: 10px; cursor: pointer; margin-left: 10px;">Limpiar Historial</button>
@@ -41,27 +41,36 @@
     <script src="converter.js"></script>
 
     <script>
-      // Registrar ambos Service Workers
+      // === REGISTRO DE SERVICE WORKER UNIFICADO ===
       if('serviceWorker' in navigator) {
-        // Service Worker principal (caché)
         navigator.serviceWorker.register('/sw.js', { scope: '/' })
-          .then(reg => console.log('SW principal registrado:', reg))
-          .catch(err => console.error('Error registrando SW principal:', err));
-        
-        // Service Worker de sincronización
-        navigator.serviceWorker.register('/sync-sw.js', { scope: '/' })
-          .then(reg => console.log('Sync SW registrado:', reg))
-          .catch(err => console.error('Error registrando Sync SW:', err));
+          .then(reg => {
+            console.log('✅ Service Worker registrado:', reg);
+            
+            // Escuchar actualizaciones
+            reg.addEventListener('updatefound', () => {
+              console.log('🔄 Nueva versión disponible');
+              const newWorker = reg.installing;
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  if (confirm('¡Nueva versión disponible! ¿Recargar página?')) {
+                    window.location.reload();
+                  }
+                }
+              });
+            });
+          })
+          .catch(err => console.error('❌ Error registrando Service Worker:', err));
       }
 
-      // Función para enviar mensajes al Sync Service Worker
-      async function sendMessageToSyncSW(message) {
+      // === FUNCIÓN PARA COMUNICARSE CON EL SW ===
+      async function sendMessageToSW(message) {
         if (!navigator.serviceWorker.controller) {
-          console.warn('No hay Service Worker activo');
+          console.warn('⚠️ No hay Service Worker activo');
           return null;
         }
 
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
           const messageChannel = new MessageChannel();
           
           messageChannel.port1.onmessage = (event) => {
@@ -72,11 +81,10 @@
         });
       }
 
-      // Guardar conversión cada vez que cambie el resultado
+      // === GUARDAR CONVERSIONES AUTOMÁTICAMENTE ===
       const converterForm = document.getElementById('converter');
       const outputTemp = document.getElementById('output-temp');
       
-      // Observer para detectar cambios en el resultado
       const observer = new MutationObserver(async () => {
         const inputTemp = document.getElementById('input-temp').value;
         const inputUnit = document.getElementById('input-unit').value;
@@ -84,7 +92,7 @@
         const result = outputTemp.textContent;
         
         if (inputTemp && result) {
-          await sendMessageToSyncSW({
+          await sendMessageToSW({
             type: 'SAVE_CONVERSION',
             data: {
               value: parseFloat(inputTemp),
@@ -93,34 +101,34 @@
               result: result
             }
           });
-          console.log('Conversión guardada');
+          console.log('💾 Conversión guardada');
         }
       });
       
       observer.observe(outputTemp, { childList: true, characterData: true, subtree: true });
 
-      // Guardar preferencias cuando cambien las unidades
+      // === GUARDAR PREFERENCIAS ===
       document.getElementById('input-unit').addEventListener('change', async (e) => {
-        await sendMessageToSyncSW({
+        await sendMessageToSW({
           type: 'SAVE_PREFERENCE',
           data: { key: 'lastInputUnit', value: e.target.value }
         });
       });
 
       document.getElementById('output-unit').addEventListener('change', async (e) => {
-        await sendMessageToSyncSW({
+        await sendMessageToSW({
           type: 'SAVE_PREFERENCE',
           data: { key: 'lastOutputUnit', value: e.target.value }
         });
       });
 
-      // Botón para mostrar historial
+      // === BOTÓN VER HISTORIAL ===
       document.getElementById('show-history').addEventListener('click', async () => {
         const historyContainer = document.getElementById('history-container');
         const historyList = document.getElementById('history-list');
         
         if (historyContainer.style.display === 'none') {
-          const response = await sendMessageToSyncSW({
+          const response = await sendMessageToSW({
             type: 'GET_CONVERSIONS',
             data: { limit: 20 }
           });
@@ -130,8 +138,8 @@
           if (response?.conversions && response.conversions.length > 0) {
             response.conversions.forEach(conv => {
               const li = document.createElement('li');
-              const date = new Date(conv.timestamp).toLocaleString();
-              li.textContent = `${conv.value} ${conv.fromUnit} → ${conv.result} (${date})`;
+              const date = new Date(conv.timestamp).toLocaleString('es-MX');
+              li.textContent = `${conv.value} ${conv.fromUnit.toUpperCase()} → ${conv.result} (${date})`;
               historyList.appendChild(li);
             });
           } else {
@@ -144,20 +152,20 @@
         }
       });
 
-      // Botón para limpiar historial
+      // === BOTÓN LIMPIAR HISTORIAL ===
       document.getElementById('clear-history').addEventListener('click', async () => {
         if (confirm('¿Seguro que deseas eliminar todo el historial?')) {
-          await sendMessageToSyncSW({ type: 'CLEAR_HISTORY' });
-          document.getElementById('history-list').innerHTML = '<li>Historial eliminado</li>';
-          console.log('Historial limpiado');
+          await sendMessageToSW({ type: 'CLEAR_HISTORY' });
+          document.getElementById('history-list').innerHTML = '<li>✓ Historial eliminado</li>';
+          console.log('🗑️ Historial limpiado');
         }
       });
 
-      // Cargar preferencias guardadas al iniciar
+      // === CARGAR PREFERENCIAS AL INICIAR ===
       window.addEventListener('load', async () => {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Esperar que SW se active
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        const response = await sendMessageToSyncSW({ type: 'GET_PREFERENCES' });
+        const response = await sendMessageToSW({ type: 'GET_PREFERENCES' });
         
         if (response?.preferences) {
           const { lastInputUnit, lastOutputUnit } = response.preferences;
@@ -169,7 +177,6 @@
             document.getElementById('output-unit').value = lastOutputUnit;
           }
           
-          // Disparar evento para actualizar la conversión
           document.getElementById('input-unit').dispatchEvent(new Event('change'));
         }
       });
