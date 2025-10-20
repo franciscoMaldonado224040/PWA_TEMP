@@ -1,7 +1,7 @@
-name: 03 Parallel Jobs
+name: 03 Sequential Jobs
 
 on:
-  workflow_dispatch:  # This event triggers the workflow manually
+  workflow_dispatch:  # Se ejecuta manualmente
 
 jobs:
   linting:
@@ -12,12 +12,14 @@ jobs:
 
   unit_tests:
     runs-on: ubuntu-latest
+    needs: linting   # Espera a que termine linting
     steps:
       - name: Unit Tests
         run: echo "Running unit tests..."
 
   integration_tests:
     runs-on: ubuntu-latest
+    needs: unit_tests   # Espera a que terminen las pruebas unitarias
     steps:
       - name: Set Up Test Environment
         run: echo "Setting up test environment..."
